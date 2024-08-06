@@ -11,7 +11,6 @@ const MAX_AUDIO_LENGTH = 30; // seconds
 const MAX_SAMPLES = WHISPER_SAMPLING_RATE * MAX_AUDIO_LENGTH;
 
 function App() {
-
   // Create a reference to the worker object.
   const worker = useRef(null);
 
@@ -23,7 +22,8 @@ function App() {
   const [progressItems, setProgressItems] = useState([]);
 
   // Inputs and outputs
-  const [text, setText] = useState('');
+  const [transcript, setTranscript] = useState('');
+  const [translation, setTranslation] = useState('');
   const [tps, setTps] = useState(null);
   const [language, setLanguage] = useState('en');
 
@@ -39,7 +39,7 @@ function App() {
     if (!worker.current) {
       // Create the worker if it does not yet exist.
       worker.current = new Worker(new URL('./worker.js', import.meta.url), {
-        type: 'module'
+        type: 'module',
       });
     }
 
@@ -53,15 +53,15 @@ function App() {
           break;
 
         case 'initiate':
-          setProgressItems(prev => [...prev, e.data]);
+          setProgressItems((prev) => [...prev, e.data]);
           break;
 
         case 'progress':
           // Model file progress: update one of the progress items.
-          setProgressItems(
-            prev => prev.map(item => {
+          setProgressItems((prev) =>
+            prev.map((item) => {
               if (item.file === e.data.file) {
-                return { ...item, ...e.data }
+                return { ...item, ...e.data };
               }
               return item;
             })
@@ -70,8 +70,8 @@ function App() {
 
         case 'done':
           // Model file loaded: remove the progress item from the list.
-          setProgressItems(
-            prev => prev.filter(item => item.file !== e.data.file)
+          setProgressItems((prev) =>
+            prev.filter((item) => item.file !== e.data.file)
           );
           break;
 
@@ -81,26 +81,29 @@ function App() {
           recorderRef.current?.start();
           break;
 
-        case 'start': {
-          // Start generation
-          setIsProcessing(true);
+        case 'start':
+          {
+            // Start generation
+            setIsProcessing(true);
 
-          // Request new data from the recorder
-          recorderRef.current?.requestData();
-        }
+            // Request new data from the recorder
+            recorderRef.current?.requestData();
+          }
           break;
 
-        case 'update': {
-          // Generation update: update the output text.
-          const { tps } = e.data;
-          setTps(tps);
-        }
+        case 'update':
+          {
+            // Generation update: update the output text.
+            const { tps } = e.data;
+            setTps(tps);
+          }
           break;
 
         case 'complete':
           // Generation complete: re-enable the "Generate" button
           setIsProcessing(false);
-          setText(e.data.output);
+          setTranscript(e.data.output[0]);
+          setTranslation(e.data.output[1]);
           break;
       }
     };
@@ -118,17 +121,20 @@ function App() {
     if (recorderRef.current) return; // Already set
 
     if (navigator.mediaDevices.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ audio: true })
-        .then(stream => {
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => {
           setStream(stream);
 
           recorderRef.current = new MediaRecorder(stream);
-          audioContextRef.current = new AudioContext({ sampleRate: WHISPER_SAMPLING_RATE });
+          audioContextRef.current = new AudioContext({
+            sampleRate: WHISPER_SAMPLING_RATE,
+          });
 
           recorderRef.current.onstart = () => {
             setRecording(true);
             setChunks([]);
-          }
+          };
           recorderRef.current.ondataavailable = (e) => {
             if (e.data.size > 0) {
               setChunks((prev) => [...prev, e.data]);
@@ -143,11 +149,10 @@ function App() {
           recorderRef.current.onstop = () => {
             setRecording(false);
           };
-
         })
-        .catch(err => console.error("The following error occurred: ", err));
+        .catch((err) => console.error('The following error occurred: ', err));
     } else {
-      console.error("getUserMedia not supported on your browser!");
+      console.error('getUserMedia not supported on your browser!');
     }
 
     return () => {
@@ -170,40 +175,75 @@ function App() {
 
       fileReader.onloadend = async () => {
         const arrayBuffer = fileReader.result;
-        const decoded = await audioContextRef.current.decodeAudioData(arrayBuffer);
+        const decoded = await audioContextRef.current.decodeAudioData(
+          arrayBuffer
+        );
         let audio = decoded.getChannelData(0);
-        if (audio.length > MAX_SAMPLES) { // Get last MAX_SAMPLES
+        if (audio.length > MAX_SAMPLES) {
+          // Get last MAX_SAMPLES
           audio = audio.slice(-MAX_SAMPLES);
         }
 
-        worker.current.postMessage({ type: 'generate', data: { audio, language } });
-      }
+        worker.current.postMessage({
+          type: 'generate',
+          data: { audio, language },
+        });
+      };
       fileReader.readAsArrayBuffer(blob);
     } else {
       recorderRef.current?.requestData();
     }
   }, [status, recording, isProcessing, chunks, language]);
 
-  return (
-    IS_WEBGPU_AVAILABLE
-      ? (<div className="flex flex-col h-screen mx-auto justify-end text-gray-800 dark:text-gray-200 bg-white dark:bg-gray-900">
-        {(
-          <div className="h-full overflow-auto scrollbar-thin flex justify-center items-center flex-col relative">
-            <div className="flex flex-col items-center mb-1 max-w-[400px] text-center">
-              <img src="logo.png" width="50%" height="auto" className="block"></img>
-              <h1 className="text-4xl font-bold mb-1">Whisper WebGPU</h1>
-              <h2 className="text-xl font-semibold">Real-time in-browser speech recognition</h2>
-            </div>
+  return IS_WEBGPU_AVAILABLE ? (
+    <div className="flex flex-col h-screen mx-auto justify-end text-gray-800 dark:text-gray-200 bg-white dark:bg-gray-900">
+      {
+        <div className="h-full overflow-auto scrollbar-thin flex justify-center items-center flex-col relative">
+          <div className="flex flex-col items-center mb-1 max-w-[400px] text-center">
+            <img
+              src="logo.png"
+              width="50%"
+              height="auto"
+              className="block"
+            ></img>
+            <h1 className="text-4xl font-bold mb-1">Whisper WebGPU</h1>
+            <h2 className="text-xl font-semibold">
+              Real-time in-browser speech recognition
+            </h2>
+          </div>
 
-            <div className="flex flex-col items-center px-4">
-              {status === null && (<>
+          <div className="flex flex-col items-center px-4">
+            {status === null && (
+              <>
                 <p className="max-w-[480px] mb-4">
                   <br />
-                  You are about to load <a href="https://huggingface.co/onnx-community/whisper-base" target="_blank" rel="noreferrer" className="font-medium underline">whisper-base</a>,
-                  a 73 million parameter speech recognition model that is optimized for inference on the web. Once downloaded, the model (~200&nbsp;MB) will be cached and reused when you revisit the page.<br />
+                  You are about to load{' '}
+                  <a
+                    href="https://huggingface.co/onnx-community/whisper-base"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium underline"
+                  >
+                    whisper-base
+                  </a>
+                  , a 73 million parameter speech recognition model that is
+                  optimized for inference on the web. Once downloaded, the model
+                  (~200&nbsp;MB) will be cached and reused when you revisit the
+                  page.
                   <br />
-                  Everything runs directly in your browser using <a href="https://huggingface.co/docs/transformers.js" target="_blank" rel="noreferrer" className="underline">🤗&nbsp;Transformers.js</a> and ONNX Runtime Web,
-                  meaning no data is sent to a server. You can even disconnect from the internet after the model has loaded!
+                  <br />
+                  Everything runs directly in your browser using{' '}
+                  <a
+                    href="https://huggingface.co/docs/transformers.js"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline"
+                  >
+                    🤗&nbsp;Transformers.js
+                  </a>{' '}
+                  and ONNX Runtime Web, meaning no data is sent to a server. You
+                  can even disconnect from the internet after the model has
+                  loaded!
                 </p>
 
                 <button
@@ -216,42 +256,75 @@ function App() {
                 >
                   Load model
                 </button>
-              </>)}
+              </>
+            )}
 
-              <div className="w-[500px] p-2">
-                <AudioVisualizer className="w-full rounded-lg" stream={stream} />
-                {status === 'ready' && <div className="relative">
-                  <p className="w-full h-[80px] overflow-y-auto overflow-wrap-anywhere border rounded-lg p-2">{text}</p>
-                  {tps && <span className="absolute bottom-0 right-0 px-1">{tps.toFixed(2)} tok/s</span>}
-                </div>}
+            <div className="w-[500px] p-2">
+              <AudioVisualizer className="w-full rounded-lg" stream={stream} />
 
-              </div>
-              {status === 'ready' && <div className='relative w-full flex justify-center'>
-                <LanguageSelector language={language} setLanguage={(e) => {
-                  recorderRef.current?.stop();
-                  setLanguage(e);
-                  recorderRef.current?.start();
-                }} />
-                <button className="border rounded-lg px-2 absolute right-2" onClick={() => {
-                  recorderRef.current?.stop();
-                  recorderRef.current?.start();
-                }}>Reset</button>
-              </div>
-              }
-              {status === 'loading' && (
-                <div className="w-full max-w-[500px] text-left mx-auto p-4">
-                  <p className="text-center">{loadingMessage}</p>
-                  {progressItems.map(({ file, progress, total }, i) => (
-                    <Progress key={i} text={file} percentage={progress} total={total} />
-                  ))}
+              {status === 'ready' && (
+                <div className="relative w-full flex justify-center">
+                  <LanguageSelector
+                    language={language}
+                    setLanguage={(e) => {
+                      recorderRef.current?.stop();
+                      setLanguage(e);
+                      recorderRef.current?.start();
+                    }}
+                  />
+                  <button
+                    className="border rounded-lg px-2 absolute right-2"
+                    onClick={() => {
+                      recorderRef.current?.stop();
+                      recorderRef.current?.start();
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              )}
+              {status === 'ready' && (
+                <div className="relative">
+                  <h2 className="text-xl font-semibold mt-2">Transcript</h2>
+                  <p className="w-full h-[80px] overflow-y-auto overflow-wrap-anywhere border rounded-lg p-2">
+                    {transcript}
+                  </p>
+                  {tps && (
+                    <span className="absolute bottom-0 right-0 px-1">
+                      {tps.toFixed(2)} tok/s
+                    </span>
+                  )}
+                  <h2 className="text-xl font-semibold mt-2">Translation</h2>
+                  <p className="w-full h-[80px] overflow-y-auto overflow-wrap-anywhere border rounded-lg p-2">
+                    {translation}
+                  </p>
                 </div>
               )}
             </div>
+            {status === 'loading' && (
+              <div className="w-full max-w-[500px] text-left mx-auto p-4">
+                <p className="text-center">{loadingMessage}</p>
+                {progressItems.map(({ file, progress, total }, i) => (
+                  <Progress
+                    key={i}
+                    text={file}
+                    percentage={progress}
+                    total={total}
+                  />
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>)
-      : (<div className="fixed w-screen h-screen bg-black z-10 bg-opacity-[92%] text-white text-2xl font-semibold flex justify-center items-center text-center">WebGPU is not supported<br />by this browser :&#40;</div>)
-  )
+        </div>
+      }
+    </div>
+  ) : (
+    <div className="fixed w-screen h-screen bg-black z-10 bg-opacity-[92%] text-white text-2xl font-semibold flex justify-center items-center text-center">
+      WebGPU is not supported
+      <br />
+      by this browser :&#40;
+    </div>
+  );
 }
 
-export default App
+export default App;

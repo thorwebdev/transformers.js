@@ -1,12 +1,10 @@
-
 import {
-    AutoTokenizer,
-    AutoProcessor,
-    WhisperForConditionalGeneration,
-    TextStreamer,
-    full,
+  AutoTokenizer,
+  AutoProcessor,
+  WhisperForConditionalGeneration,
+  TextStreamer,
+  full,
 } from '@xenova/transformers';
-
 
 const MAX_NEW_TOKENS = 64;
 
@@ -14,121 +12,151 @@ const MAX_NEW_TOKENS = 64;
  * This class uses the Singleton pattern to ensure that only one instance of the model is loaded.
  */
 class AutomaticSpeechRecognitionPipeline {
-    static model_id = null;
-    static tokenizer = null;
-    static processor = null;
-    static model = null;
+  static model_id = null;
+  static tokenizer = null;
+  static processor = null;
+  static model = null;
 
-    static async getInstance(progress_callback = null) {
-        this.model_id = 'onnx-community/whisper-base';
+  static async getInstance(progress_callback = null) {
+    this.model_id = 'onnx-community/whisper-small';
 
-        this.tokenizer ??= AutoTokenizer.from_pretrained(this.model_id, {
-            progress_callback,
-        });
-        this.processor ??= AutoProcessor.from_pretrained(this.model_id, {
-            progress_callback,
-        });
+    this.tokenizer ??= AutoTokenizer.from_pretrained(this.model_id, {
+      progress_callback,
+    });
+    this.processor ??= AutoProcessor.from_pretrained(this.model_id, {
+      progress_callback,
+    });
 
-        this.model ??= WhisperForConditionalGeneration.from_pretrained(this.model_id, {
-            dtype: {
-                encoder_model: 'fp32', // 'fp16' works too
-                decoder_model_merged: 'q4', // or 'fp32' ('fp16' is broken)
-            },
-            device: 'webgpu',
-            progress_callback,
-        });
+    this.model ??= WhisperForConditionalGeneration.from_pretrained(
+      this.model_id,
+      {
+        dtype: {
+          encoder_model: 'fp32', // 'fp16' works too
+          decoder_model_merged: 'q4', // or 'fp32' ('fp16' is broken)
+        },
+        device: 'webgpu',
+        progress_callback,
+      }
+    );
 
-        return Promise.all([this.tokenizer, this.processor, this.model]);
-    }
+    return Promise.all([this.tokenizer, this.processor, this.model]);
+  }
 }
 
 let processing = false;
 async function generate({ audio, language }) {
-    if (processing) return;
-    processing = true;
+  if (processing) return;
+  processing = true;
 
-    // Tell the main thread we are starting
-    self.postMessage({ status: 'start' });
+  // Tell the main thread we are starting
+  self.postMessage({ status: 'start' });
 
-    // Retrieve the text-generation pipeline.
-    const [tokenizer, processor, model] = await AutomaticSpeechRecognitionPipeline.getInstance();
+  // Retrieve the text-generation pipeline.
+  const [tokenizer, processor, model] =
+    await AutomaticSpeechRecognitionPipeline.getInstance();
 
-    let startTime;
-    let numTokens = 0;
-    const callback_function = (output) => {
-        startTime ??= performance.now();
+  // let startTime;
+  // let numTokens = 0;
+  // const callback_function = (output) => {
+  //   startTime ??= performance.now();
 
-        let tps;
-        if (numTokens++ > 0) {
-            tps = numTokens / (performance.now() - startTime) * 1000;
-        }
-        self.postMessage({
-            status: 'update',
-            output, tps, numTokens,
-        });
-    }
+  //   let tps;
+  //   if (numTokens++ > 0) {
+  //     tps = (numTokens / (performance.now() - startTime)) * 1000;
+  //   }
+  //   self.postMessage({
+  //     status: 'update',
+  //     output,
+  //     tps,
+  //     numTokens,
+  //   });
+  // };
 
-    const streamer = new TextStreamer(tokenizer, {
-        skip_prompt: true,
-        skip_special_tokens: true,
-        callback_function,
-    });
+  // const streamer = new TextStreamer(tokenizer, {
+  //   skip_prompt: true,
+  //   skip_special_tokens: true,
+  //   callback_function,
+  // });
 
-    const inputs = await processor(audio);
+  const inputs = await processor(audio);
 
-    const outputs = await model.generate({
-        ...inputs,
-        max_new_tokens: MAX_NEW_TOKENS,
-        language,
-        streamer,
-    });
+  const {
+    decoder_start_token_id,
+    lang_to_id,
+    task_to_id,
+    no_timestamps_token_id,
+  } = model.generation_config;
 
-    const outputText = tokenizer.batch_decode(outputs, { skip_special_tokens: true });
+  const outputs = await model.generate({
+    ...inputs,
+    decoder_input_ids: [
+      // <|startoftranscript|> <|lang_id|> <|task|> [<|notimestamps|>]
+      [
+        decoder_start_token_id,
+        lang_to_id[`<|${language}|>`],
+        task_to_id['transcribe'],
+        no_timestamps_token_id,
+      ],
+      [
+        decoder_start_token_id,
+        lang_to_id[`<|${language}|>`],
+        task_to_id['translate'],
+        no_timestamps_token_id,
+      ],
+    ],
+    max_new_tokens: MAX_NEW_TOKENS,
+    // streamer, // Error: TextStreamer only supports batch size of 1
+  });
 
-    // Send the output back to the main thread
-    self.postMessage({
-        status: 'complete',
-        output: outputText,
-    });
-    processing = false;
+  const outputText = tokenizer.batch_decode(outputs, {
+    skip_special_tokens: true,
+  });
+
+  // Send the output back to the main thread
+  self.postMessage({
+    status: 'complete',
+    output: outputText,
+  });
+  processing = false;
 }
 
 async function load() {
-    self.postMessage({
-        status: 'loading',
-        data: 'Loading model...'
+  self.postMessage({
+    status: 'loading',
+    data: 'Loading model...',
+  });
+
+  // Load the pipeline and save it for future use.
+  const [tokenizer, processor, model] =
+    await AutomaticSpeechRecognitionPipeline.getInstance((x) => {
+      // We also add a progress callback to the pipeline so that we can
+      // track model loading.
+      self.postMessage(x);
     });
 
-    // Load the pipeline and save it for future use.
-    const [tokenizer, processor, model] = await AutomaticSpeechRecognitionPipeline.getInstance(x => {
-        // We also add a progress callback to the pipeline so that we can
-        // track model loading.
-        self.postMessage(x);
-    });
+  self.postMessage({
+    status: 'loading',
+    data: 'Compiling shaders and warming up model...',
+  });
 
-    self.postMessage({
-        status: 'loading',
-        data: 'Compiling shaders and warming up model...'
-    });
-
-    // Run model with dummy input to compile shaders
-    await model.generate({
-        input_features: full([1, 80, 3000], 0.0),
-        max_new_tokens: 1,
-    });
-    self.postMessage({ status: 'ready' });
+  // Run model with dummy input to compile shaders
+  await model.generate({
+    input_features: full([1, 80, 3000], 0.0),
+    max_new_tokens: 1,
+  });
+  self.postMessage({ status: 'ready' });
 }
 // Listen for messages from the main thread
 self.addEventListener('message', async (e) => {
-    const { type, data } = e.data;
+  const { type, data } = e.data;
 
-    switch (type) {
-        case 'load':
-            load();
-            break;
+  switch (type) {
+    case 'load':
+      load();
+      break;
 
-        case 'generate':
-            generate(data);
-            break;
-    }
+    case 'generate':
+      generate(data);
+      break;
+  }
 });
